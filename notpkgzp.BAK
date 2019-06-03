@@ -1,0 +1,140 @@
+*- ----------------------------------------------------------------------------------------------------------------------- -*
+*- 2/21/06 - ZPL Portrait Packing List for use with Zebra 105se & Zebra 4M printers
+*- Written by Michael J. Sabal, Notations, Inc.
+*- Portions taken from notmayuc.prg by Bruno DIEPENDAELE
+*- ----------------------------------------------------------------------------------------------------------------------- -*
+
+LOCAL lnOrgArea
+LOCAL lcPrintString, lcHeaderString
+LOCAL lnLineNum, lnTotalQty, lnOffset
+
+lnOrgArea=SELECT()
+lcOrgAlias=ALIAS()
+lnLineNum=0
+lnTotalQty=0
+lnOffset=0
+
+select *, style as SortStyle from (lcOrgAlias) into cursor curSortStyleTemp
+MakeCursorWritable('curSortStyleTemp','curSortStyle')
+select carton_num from (lcOrgAlias) into cursor curCartonList group by carton_num
+SCAN
+	SELECT style,carton_num from (lcOrgAlias) WHERE carton_num=curCartonList.carton_num INTO CURSOR curOneCarton ORDER BY style
+	*- Take first style in alpha order as the SortStyle
+	lcSortStyle=curOneCarton.style
+	replace SortStyle WITH lcSortStyle FOR carton_num=curCartonList.carton_num IN curSortStyle
+ENDSCAN
+IF USED('curOneCarton')
+	USE IN curOneCarton
+ENDIF
+USE IN curCartonList
+
+*- Create cursor curGroupByCarton = list of carton ordered by customer,SortStyle,carton_num
+*- This cursor is defining the label sequencing
+select Customer,SortStyle,Carton_num from curSortStyle into cursor curGroupByCarton ;
+ 	   group by customer,SortStyle,carton_num ORDER BY customer,SortStyle,carton_num
+SCAN
+
+lcCurPrintFinalTemp = GetUniqueFileName()
+SELECT *, ;
+ space(12) as SKU_UPC ;
+FROM (lcOrgAlias) ;
+where .F. ; 
+INTO CURSOR CurPart2Temp
+MakeCursorWritable('CurPart2Temp','CurPart2')
+
+select * from (lcOrgAlias) where carton_num=curGroupByCarton.carton_num into cursor cur2Temp
+scan
+	*- Get the Customer style = First lookup in Customer Style Reference - If not found lookup in UPC
+	*- -----------------------------------------------------------------------------------------------
+    lcSKU_UPC = vl_cstdr(cur2Temp.customer,'CUST_STYLE','',cur2Temp.division,cur2Temp.Style,cur2Temp.color_code,cur2Temp.lbl_code,cur2Temp.dimension,cur2Temp.sizebucket)
+	
+	IF EMPTY(lcSKU_UPC)
+		*- zveupcnr.upc_num = char(11)
+		lcUPC=vl_upcsr(cur2Temp.Division,'upc_num','',cur2Temp.Style,cur2Temp.Color_code,cur2Temp.lbl_code,cur2Temp.Dimension,cur2Temp.Sizebucket)
+		lcUPC_chk=vl_upcsr(cur2Temp.Division,'chk_digit','',cur2Temp.Style,cur2Temp.Color_code,cur2Temp.lbl_code,cur2Temp.Dimension,cur2Temp.Sizebucket)		
+		lcSKU_UPC=allt(lcUPC)+allt(lcUPC_chk)
+	ENDIF
+		
+	*- Add one new record in CurPart2
+	select cur2Temp
+	SCATTER memvar MEMO
+	insert into CurPart2 from MEMVAR	
+	replace SKU_UPC with lcSKU_UPC in CurPart2
+endscan
+
+Select CurPart2
+go top
+
+*- Initialize Print Job
+lcPrintString = "^XA^IA0^COY,0^XZ^XA^LH0,16^PRB^FS^MSY^PF0^FS"
+
+DO WHILE NOT EOF('CurPart2')
+  *- Page Header
+  if lnTotalQty=0 then
+    lcHeaderString = "CARTON PACKING LIST"
+  else
+    lcHeaderString = "PACKING LIST (CONT.)"
+  endif
+  lcPrintString = lcPrintString + "^FO150,30^A0N,70,60^FD"+lcHeaderString+"^FS"
+  lcPrintString = lcPrintString + "^FO50,100^A0N,29,26^FDCUSTOMER: "+allt(sfscust_name)+"^FS"
+  lcPrintString = lcPrintString + "^FO50,135^A0N,29,26^FDPO #: "+allt(po_num)+"^FS"
+  lcPrintString = lcPrintString + "^FO500,205^A0N,29,26^FDDEPT: "+allt(department)+"^FS"
+  lcPrintString = lcPrintString + "^FO50,170^A0N,29,26^FDSTORE #: "+allt(store)+"^FS"
+  lcPrintString = lcPrintString + "^FO400,125^A0N,70,60^FDP/S #: "+allt(str(pick_num))+"^FS"
+  lcPrintString = lcPrintString + "^FO50,205^A0N,29,26^FDCARTON #: "+allt(carton_num)+"^FS"
+  
+  *- Detail header
+  lcPrintString = lcPrintString + "^FO190,265^A0N,35,29^FDTHIS CARTON CONTAINS:^FS"
+  lcPrintString = lcPrintString + "^FO50,325^A0N,25,20^FDUPC/SKU^FS"+;
+  	"^FO250,325^A0N,25,20^FDSTYLE^FS"+;
+	"^FO450,325^A0N,25,20^FDCOLOR^FS"+;
+	"^FO550,325^A0N,25,20^FDSIZE^FS"+;
+	"^FO625,325^A0N,25,20^FDQUANTITY^FS"
+  lnOffset=360
+  lnLineNum=0
+  DO WHILE NOT EOF('CurPart2') and lnLineNum<30
+    lcPrintString = lcPrintString + "^FO50,"+allt(str(lnOffset))+"^ACN,22,10^FD"+;
+	padr(SKU_UPC,27)+"^FS"+;
+	"^FO250,"+ALLTRIM(STR(lnOffset))+"^ACN,22,10^FD"+style+"^FS"+;
+	"^FO450,"+ALLTRIM(STR(lnOffset))+"^ACN,22,10^FD"+color_code+"^FS"+;
+	"^FO550,"+ALLTRIM(STR(lnOffset))+"^ACN,22,10^FD"+size_desc+"^FS"+;
+	"^FO625,"+ALLTRIM(STR(lnOffset))+"^ACN,22,10^FD"+PADL(ALLTRIM(str(Total_qty)),6)+"^FS"
+    lnTotalQty = lnTotalQty + Total_qty
+    lnLineNum = lnLineNum + 1
+    lnOffset = lnOffset + 25
+
+    skip 1 in CurPart2
+  ENDDO
+  if lnLineNum >= 30 then
+    lcPrintString = lcPrintString + "^FO130,"+allt(str(lnOffset+40))+;
+	"^ACN,22,10^FDPACKING LIST CONTINUES ------>^FS"
+    lcPrintString = lcPrintString + "^PQ1,0,1,Y^XZ^XA^XZ"
+    ??? lcPrintString
+    lcPrintString = "^XA^IA0^COY,0^XZ^XA^LH0,16^PRB^FS^MSY^PF0^FS"
+  endif
+
+ENDDO
+
+*- Print summary section
+
+lcPrintString = lcPrintString + "^FO130,"+allt(str(lnOffset))+;
+	"^ACN,22,10^FDTOTAL PIECES IN CARTON --------------->"+PADL(ALLTRIM(str(lnTotalQty)),6)+"^FS"
+lcPrintString = lcPrintString + "^FO130,1125"+;
+	"^A0N,80,69^FDTOTAL PIECES - "+allt(str(lnTotalQty))+"^FS"
+lcPrintString = lcPrintString + "^PQ1,0,1,Y^XZ^XA^XZ"
+??? lcPrintString
+
+
+ENDSCAN
+
+
+select (lnOrgArea)
+
+
+*- Turn off the printer
+SET DEVICE TO SCREEN
+SET PRINTER TO
+
+use in CurPart2
+
+RETURN .T.

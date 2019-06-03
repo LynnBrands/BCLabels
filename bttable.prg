@@ -1,0 +1,10 @@
+??? "#!A1#IMS101.6/156.0#PR7#G#HV90#ERN1"	 && 4" wide by 6" long "Page" +;
+"#M2/2#T50.0#J50.0#YT109/2M///TABLE PROGRAM#G" +;
+"#T50.0#J100.0#YT109/2M///DO NOT HANG#G#M1/1" +;
+"#Q1#G"
+
+
+*- Turn off the printer
+SET DEVICE TO SCREEN
+SET PRINTER TO
+RETURN .T.
